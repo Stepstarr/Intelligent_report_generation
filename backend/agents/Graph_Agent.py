@@ -6,24 +6,30 @@ from langchain.chat_models import init_chat_model
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+from backend.agents.tools import WebTools, GetFullText
+from backend.agents.prompts import graph_template, fewshot_graph_template, initial_refine_template, refine_template
 
-from backend.agents.prompts import graph_template, fewshot_graph_template
+from backend.database.loader import DocumentLoader
+import time
 from backend.agents.Search_Agent import Search_Agent
 
 class GraphAgent:
     """
     图检索代理：根据报告主题和部分内容生成检索问题，构建检索图
     """
-    def __init__(self, search_client):
+    def __init__(self, search_agent: Search_Agent, persist_directory: str = "./chroma_db"):
         """
         初始化图检索代理
         
         Args:
             search_client: 搜索客户端，用于执行DuckDuckGo搜索
         """
-        self.search_client = search_client
+        # self.search_client = search_client
+        self.document_loader = DocumentLoader(persist_directory=persist_directory)
         self.logger = logging.getLogger(__name__)
         self.model = init_chat_model("deepseek-chat", model_provider="deepseek", temperature=0)
+        self.web_tools = WebTools() 
+        self.search_agent = search_agent
     
     def generate_initial_questions(self, topic: str, section: str) -> List[str]:
         """
@@ -49,7 +55,6 @@ class GraphAgent:
             think_matches = re.findall(think_pattern, response, re.DOTALL)
             for match in think_matches:
                 think_processes.append(match.strip())
-                print(match.strip())
             
             # 解析问题
             questions = []
@@ -57,7 +62,6 @@ class GraphAgent:
             question_matches = re.findall(question_pattern, response, re.DOTALL)
             for match in question_matches:
                 questions.append(match.strip())
-                print(match.strip())
             # 如果LLM没有生成足够的问题，添加一些默认问题
             if len(questions) < 3:
                 default_questions = [
@@ -68,11 +72,11 @@ class GraphAgent:
                 ]
                 questions.extend(default_questions[:5-len(questions)])
                 
-            # 记录思考过程（可选）
+            # 记录思考过程
             if think_processes:
                 self.logger.info(f"LLM思考过程: {think_processes}")
-                
-            return questions[:5]  # 限制最多返回5个问题
+            print(questions[:5])
+            return questions[:5] , think_processes  # 限制最多返回5个问题
             
         except Exception as e:
             self.logger.error(f"使用LLM生成问题时出错: {str(e)}")
@@ -83,128 +87,171 @@ class GraphAgent:
                 f"{topic} {section} 最新研究",
                 f"{topic} {section} 数据统计"
             ]
-   
-    # TODO：以下均需要修改
-    async def generate_follow_up_questions(self, topic: str, section: str, 
-                                          search_results: List[Dict[str, Any]]) -> List[str]:
+        
+    # TODO：以下要整合Search_Agent Search_Agent可以有chat mode 和 search mode 
+    def search_web(self, question: str) -> List[str]:
         """
-        根据初始搜索结果生成后续检索问题
+        根据问题搜索网络和知识库
         
         Args:
-            topic: 报告主题
-            section: 报告部分
-            search_results: 初始搜索结果
-            
+            question: 搜索问题  
+        
         Returns:
-            后续检索问题列表
+            搜索结果列表
         """
-        # 从搜索结果中提取关键信息，生成更具体的问题
-        # 实际应用中应使用LLM分析搜索结果并生成问题
-        follow_up_questions = []
+        # 使用DuckDuckGo搜索
+        search_results_text = self.web_tools.get_search_tool().run(question,max_results=4)
+        time.sleep(1)
+        # 解析搜索结果文本为结构化数据
+        web_results = self._parse_search_results(search_results_text)
         
-        # 从搜索结果中提取关键词和概念
-        keywords = self._extract_keywords_from_results(search_results)
+        # 从知识库中搜索
+        kb_results = self._search_knowledge_base(question)
         
-        # 为每个关键词生成更具体的问题
-        for keyword in keywords[:3]:  # 限制问题数量
-            follow_up_questions.append(f"{topic} {section} {keyword} 详细分析")
-            follow_up_questions.append(f"{keyword} 在{topic}中的应用")
-        
-        return follow_up_questions
+        # 合并结果
+        combined_results = web_results + kb_results
+            
+        return combined_results
     
-    def _extract_keywords_from_results(self, search_results: List[Dict[str, Any]]) -> List[str]:
-        """
-        从搜索结果中提取关键词
-        
-        Args:
-            search_results: 搜索结果
+    def _parse_search_results(self, search_results_text: str) -> List[Dict]:
+        """将搜索工具返回的文本解析为结构化数据"""
+        results = []
+        if not search_results_text or "没有找到相关搜索结果" in search_results_text:
+            return results
             
-        Returns:
-            关键词列表
-        """
-        # 简化实现，实际应用中应使用NLP技术提取关键词
-        keywords = []
-        for result in search_results:
-            if 'title' in result:
-                # 简单地将标题分词并添加到关键词列表
-                words = result['title'].split()
-                keywords.extend([w for w in words if len(w) > 4])  # 简单过滤短词
+        # 按分隔符分割不同的搜索结果
+        result_blocks = search_results_text.split("\n---\n")
         
-        # 去重并返回
-        return list(set(keywords))
+        for block in result_blocks:
+            if not block.strip():
+                continue
+                
+            result = {}
+            lines = block.strip().split("\n")
+            
+            for line in lines:
+                if line.startswith("标题:"):
+                    result["title"] = line[3:].strip()
+                elif line.startswith("链接:"):
+                    result["url"] = line[3:].strip()
+                elif line.startswith("摘要:"):
+                    result["snippet"] = line[3:].strip()
+            
+            if result:  # 只有当解析出结果时才添加
+                results.append(result)              
+        return results
     
-    async def build_search_graph(self, topic: str, section: str) -> Dict[str, Any]:
-
+    def _search_knowledge_base(self, question: str, n_results: int = 3) -> List[Dict]:
         """
-        构建检索图
+        从知识库中搜索相关内容
         
         Args:
-            topic: 报告主题
-            section: 报告部分
+            question: 搜索问题
+            n_results: 返回结果数量
             
         Returns:
-            检索图，包含问题和对应的搜索结果
+            知识库搜索结果列表
         """
-        search_graph = {
-            "topic": topic,
-            "section": section,
-            "nodes": []
-        }
-        
-        # 生成初始问题
-        initial_questions = await self.generate_initial_questions(topic, section)
-        
-        # 执行初始搜索
-        initial_results = {}
-        initial_search_tasks = []
-        
-        for question in initial_questions:
-            task = asyncio.create_task(self.search_client.search(question))
-            initial_search_tasks.append((question, task))
-        
-        # 等待所有初始搜索完成
-        for question, task in initial_search_tasks:
-            try:
-                results = await task
-                initial_results[question] = results
-                search_graph["nodes"].append({
-                    "question": question,
-                    "results": results,
-                    "follow_up_questions": []
+       
+            # 初始化知识库加载器
+        kb_results = self.document_loader.search_documents(question, n_results=n_results)
+            # 转换为与网络搜索结果相同的格式
+        formatted_results = []
+        for result in kb_results:
+            formatted_results.append({
+                    "title": result['metadata'].get('title', '知识库文档'),
+                    "url": f"知识库链接:{result['metadata'].get('title', '未知文档')}",
+                    "snippet": result['content'][:200] + "..." if len(result['content']) > 200 else result['content'],
+                    "full_text": result['content'],
+                    "source": "knowledge_base",
+                    "distance": result.get('distance', 0)
                 })
-            except Exception as e:
-                self.logger.error(f"搜索问题 '{question}' 时出错: {str(e)}")
-        
-        # 为每个初始问题生成后续问题
-        for i, node in enumerate(search_graph["nodes"]):
-            question = node["question"]
-            results = node["results"]
+        print(formatted_results)
+        return formatted_results
             
-            # 生成后续问题
-            follow_up_questions = await self.generate_follow_up_questions(topic, section, results)
-            
-            # 执行后续搜索
-            follow_up_search_tasks = []
-            for follow_up_question in follow_up_questions:
-                task = asyncio.create_task(self.search_client.search(follow_up_question))
-                follow_up_search_tasks.append((follow_up_question, task))
-            
-            # 等待所有后续搜索完成
-            for follow_up_question, task in follow_up_search_tasks:
-                try:
-                    follow_up_results = await task
-                    search_graph["nodes"][i]["follow_up_questions"].append({
-                        "question": follow_up_question,
-                        "results": follow_up_results
-                    })
-                except Exception as e:
-                    self.logger.error(f"搜索后续问题 '{follow_up_question}' 时出错: {str(e)}")
-        
-        return search_graph
 
+    
+    # TODO：refine链要解耦
+    def refine_documents(self, search_results: List[Dict], topic: str, section: str,refine_document=None) -> str:
+        """
+        根据搜索结果优化文档，构建一个文档链，每个文档依次进入链条进行提炼
+        
+        Args:
+            search_results: 搜索结果列表
+            topic: 报告主题
+            section: 报告部分
+            
+        Returns:
+            提炼后的文档内容
+        """
+        if not search_results:
+            self.logger.warning("没有搜索结果可供提炼")
+            return f"未找到关于{topic}的{section}相关信息。"
+            
+        # 初始文档
+        refined_doc = ""
+        
+        # 提炼提示词模板
+        initial_prompt_template = initial_refine_template
+        
+        refine_prompt_template = refine_template
+        try:
+            if refine_document:
+                refined_doc = refine_document
+                for i in range(0, len(search_results)):
+                    print(i)
+                    if "full_text" in search_results[i]:
+                        doc = search_results[i]["full_text"]+"\n"+"url:"+search_results[i]["url"]
+                        refine_prompt = refine_prompt_template.format(
+                        topic=topic,
+                        section=section,
+                        existing_content=refined_doc,
+                        document=doc
+                    )
+                        refined_doc = self.model.invoke(refine_prompt).content
+                    
+                return refined_doc
+                
+
+            # 处理第一个文档
+            if search_results and "full_text" in search_results[0]:
+                first_doc = search_results[0]["full_text"]+"\n"+"url:"+search_results[0]["url"]
+                initial_prompt = initial_prompt_template.format(
+                    topic=topic,
+                    section=section,
+                    document=first_doc
+                )
+                refined_doc = self.model.invoke(initial_prompt).content
+                
+            # 依次处理剩余文档
+            for i in range(1, len(search_results)):
+                print(i)
+                if "full_text" in search_results[i]:
+                    doc = search_results[i]["full_text"]+"\n"+"url:"+search_results[i]["url"]
+                    refine_prompt = refine_prompt_template.format(
+                        topic=topic,
+                        section=section,
+                        existing_content=refined_doc,
+                        document=doc
+                    )
+                    refined_doc = self.model.invoke(refine_prompt).content
+                    
+            return refined_doc
+            
+        except Exception as e:
+            self.logger.error(f"提炼文档时出错: {str(e)}")
+            return f"处理{topic}的{section}信息时遇到错误。"
+    
+    # TODO：以下均需要修改
 if __name__ == "__main__":
     graph_agent = GraphAgent(Search_Agent())
     topic = "量子计算技术动态"
     section = "政策和战略"
-    questions = graph_agent.generate_initial_questions(topic, section)
-    print(questions)
+    questions, _ = graph_agent.generate_initial_questions(topic, section)
+    refined_doc = None
+    for question in questions:
+        search_results = graph_agent.search_web(question)
+        refined_doc = graph_agent.refine_documents(search_results, topic, section,refined_doc)
+        print('---------------------------------------------------------------------------')
+        print(refined_doc)
+        print('---------------------------------------------------------------------------')

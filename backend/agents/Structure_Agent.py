@@ -6,7 +6,10 @@ from langchain.tools import BaseTool
 from langchain.agents import AgentExecutor, Tool
 from langchain_community.tools import DuckDuckGoSearchResults 
 from langchain.agents import initialize_agent  # 新增初始化方法
-from prompts import fewshot_structure_template,structure_template_cn
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+from backend.agents.prompts import fewshot_structure_template,structure_template_cn
 from langchain_core.output_parsers import JsonOutputParser  # 输出解析器
 
 class Structure_Agent:
