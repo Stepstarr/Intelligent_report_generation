@@ -1,0 +1,27 @@
+[tool.poetry]
+name = "intelligent-report-generation"
+version = "0.1.0"
+description = ""
+authors = ["Stepstarr <1075730430@qq.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+langchain = "^0.3.19"
+langchain-community = "^0.3.19"
+duckduckgo-search = "^7.5.0"
+beautifulsoup4 = "^4.13.3"
+requests = "^2.32.3"
+streamlit = "^1.43.0"
+langchain-openai = "^0.3.7"
+langchain-deepseek = "^0.1.2"
+chromadb = "^0.6.3"
+docx2txt = "^0.8"
+
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.29.5"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

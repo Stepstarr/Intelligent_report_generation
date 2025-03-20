@@ -35,7 +35,7 @@ agent = get_agent()
 
 # 初始化聊天历史
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": "你好！我是 AI 助手，让我们开始聊天吧！ 👋", "citation": ""}]
+    st.session_state.messages = [{"role": "assistant", "content": "你好！我是 AI 情报检索助手，让我们开始聊天吧！ 👋", "citation": ""}]
 
 # 显示聊天历史
 for message in st.session_state.messages:

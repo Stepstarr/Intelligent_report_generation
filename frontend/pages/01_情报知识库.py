@@ -59,6 +59,10 @@ with top_col1:
         help="支持 txt、pdf、doc、docx 格式的文件"
     )
 
+    # 重置submitted状态，允许继续上传
+    if uploaded_file is None and "submitted" in st.session_state:
+        del st.session_state.submitted
+
     if uploaded_file is not None and "submitted" not in st.session_state:
         # 创建临时文件
         with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}") as tmp_file:
@@ -216,9 +220,12 @@ if st.session_state.knowledge_base:
     with col2:
         if st.button("删除", key="delete_button", use_container_width=True):
             if file_to_delete in st.session_state.knowledge_base:
+                # 从数据库中删除文档
+                source_path = file_to_delete  # 文件名作为source标识
+                st.session_state.document_loader.delete_document_by_source(source_path)
+                
+                # 从session state中删除
                 del st.session_state.knowledge_base[file_to_delete]
-                # 清空并重建数据库
-                st.session_state.document_loader.clear_collection()
                 st.success(f"已删除文件：{file_to_delete}")
                 st.rerun()
 

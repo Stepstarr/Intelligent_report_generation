@@ -5,8 +5,11 @@ from langchain_community.document_loaders import (
     UnstructuredURLLoader,
     TextLoader
 )
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from .chroma_manager import ChromaManager
+from backend.database.chroma_manager import ChromaManager
 
 class DocumentLoader:
     def __init__(self, persist_directory: str = "./chroma_db"):
@@ -68,27 +71,33 @@ class DocumentLoader:
         )
         
     def search_documents(self, query: str, n_results: int = 5) -> List[Dict]:
-        # TODO：需要单拿出来做
         """搜索相关文档并返回结果及其来源文档信息"""
-        results = self.collection.query(
-            query_texts=[query],
-            n_results=n_results,
-            include=["metadatas", "documents", "distances"]
-        )
-        
-        # 格式化返回结果
-        formatted_results = []
-        for i in range(len(results['ids'][0])):
-            formatted_results.append({
-                'chunk_id': results['ids'][0][i],
-                'content': results['documents'][0][i],
-                'metadata': results['metadatas'][0][i],
-                'distance': results['distances'][0][i],
-                'notes': results['metadatas'][0][i]['notes'],
-                'summary': results['metadatas'][0][i]['summary']
-            })
+        try:
+            results = self.collection.query(
+                query_texts=[query],
+                n_results=n_results,
+                include=["metadatas", "documents", "distances"]
+            )
             
-        return formatted_results
+            # 格式化返回结果
+            formatted_results = []
+            for i in range(len(results['ids'][0])):
+                formatted_results.append({
+                    'chunk_id': results['ids'][0][i],
+                    'content': results['documents'][0][i],
+                    'metadata': results['metadatas'][0][i],
+                    'distance': results['distances'][0][i],
+                    'notes': results['metadatas'][0][i]['notes'],
+                    'summary': results['metadatas'][0][i]['summary']
+                })
+            
+            return formatted_results
+        except ConnectionError as e:
+            print(f"连接错误: {str(e)}")
+            return []
+        except Exception as e:
+            print(f"搜索文档时发生错误: {str(e)}")
+            return []
 
     def get_all_documents(self) -> List[Dict]:
         """获取数据库中的所有文档"""
